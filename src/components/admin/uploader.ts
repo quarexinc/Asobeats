@@ -36,14 +36,18 @@ export async function uploadFile(
   if (opts.mode === "blob") {
     const pathname =
       opts.kind === "private" ? `beats/${opts.folder}/${randomId()}/${name}` : `beats/${opts.folder}/${name}`;
-    const res = await upload(pathname, file, {
-      access: "public",
-      handleUploadUrl: "/api/upload",
-      contentType: file.type || undefined,
-      multipart: file.size > 8 * 1024 * 1024,
-      onUploadProgress: (e) => opts.onProgress?.(Math.round(e.percentage)),
-    });
-    return res.url;
+    try {
+      const res = await upload(pathname, file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        contentType: file.type || undefined,
+        multipart: file.size > 8 * 1024 * 1024,
+        onUploadProgress: (e) => opts.onProgress?.(Math.round(e.percentage)),
+      });
+      return res.url;
+    } catch (err) {
+      throw new Error(await explainUploadError(err as Error));
+    }
   }
 
   // yerel geliştirme
@@ -78,4 +82,20 @@ export async function api<T = { ok: true }>(url: string, method: string, body?: 
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || `İşlem başarısız (${res.status})`);
   return json as T;
+}
+
+/** Vercel Blob hatalarını anlaşılır Türkçe açıklamaya çevirir */
+async function explainUploadError(err: Error): Promise<string> {
+  const msg = err.message || "";
+  try {
+    const res = await fetch("/api/upload", { cache: "no-store" });
+    if (res.status === 401) return "Oturumun kapanmış. Sayfayı yenileyip tekrar giriş yap.";
+    const json = await res.json();
+    if (json.problem) return json.problem;
+  } catch {}
+  if (/private/i.test(msg) || /access/i.test(msg))
+    return "Blob deposu 'Private' olarak oluşturulmuş. Vercel → Storage'da 'Public' erişimli yeni bir Blob deposu oluştur, projeye bağla ve Redeploy yap.";
+  if (/content type|contentType/i.test(msg)) return "Bu dosya türü desteklenmiyor. MP3, WAV, JPG, PNG ya da WEBP yükle.";
+  if (/too large|size/i.test(msg)) return "Dosya çok büyük (en fazla 200 MB).";
+  return "Yükleme başarısız: " + msg;
 }
